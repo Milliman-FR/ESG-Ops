@@ -6,3 +6,4 @@ __pycache__/
 EIOPA_311225_Central_VA/
 tests/
 esg_file_downloader.py
+inputs/

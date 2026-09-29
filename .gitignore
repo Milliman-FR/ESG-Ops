@@ -2,3 +2,7 @@ EIOPA_311225_Central_VA/
 .venv/
 __pycache__/
 *.py[cod]
+.env
+.env.*
+!.env.example
+inputs/

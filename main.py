@@ -2,11 +2,17 @@
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 from zipfile import BadZipFile, ZipFile
 
 import requests
+
+if sys.platform == "win32":
+    import truststore
+
+    truststore.inject_into_ssl()
 
 from esg_api import extract_table_metadata, parse_project_url
 
@@ -17,7 +23,7 @@ def read_inputs(input_directory: Path) -> dict[str, str]:
         payload = json.load(stream)
     entries = payload["inputs"]
     if not isinstance(entries, list):
-        raise ValueError("Le champ inputs doit être une liste.")
+        raise TypeError("Le champ inputs doit être une liste.")
 
     values = {}
     for entry in entries:
@@ -47,9 +53,15 @@ def download(input_directory: Path, output_directory: Path) -> dict:
     ):
         raise ValueError("ProjectUrl doit être une URL HTTPS ESG sur milliman-mind.com.")
 
+    with requests.Session() as session:
+        return _download_with_session(session, values, base_url, project_id, output_directory)
+
+
+def _download_with_session(session, values, base_url, project_id, output_directory):
+    """Reuse one verified TLS connection for metadata, listing and ZIP requests."""
     headers = {"Authorization": f"Bearer {values['Token']}", "Accept": "application/json"}
     project_path = f"{base_url}/api/projects/{quote(project_id, safe='')}"
-    states_response = requests.get(
+    states_response = session.get(
         f"{project_path}/operations/tables", headers=headers, timeout=30
     )
     states_response.raise_for_status()
@@ -66,7 +78,7 @@ def download(input_directory: Path, output_directory: Path) -> dict:
         f"/{quote(str(table['versionId']), safe='')}"
     )
     params = {"sensitivityId": values["SensitivityId"]} if values.get("SensitivityId") else None
-    listing = requests.get(files_url, headers=headers, params=params, timeout=30)
+    listing = session.get(files_url, headers=headers, params=params, timeout=30)
     listing.raise_for_status()
     file_paths = listing.json()
     if not isinstance(file_paths, list) or not file_paths or not all(
@@ -77,7 +89,7 @@ def download(input_directory: Path, output_directory: Path) -> dict:
     output_directory.mkdir(parents=True, exist_ok=True)
     archive_path = output_directory / "esg_download.zip"
     try:
-        with requests.post(
+        with session.post(
             files_url,
             headers={**headers, "Content-Type": "application/json", "Accept": "application/octet-stream"},
             params=params,
