@@ -1,0 +1,25 @@
+{
+  "version": "1",
+  "commands": ["run"],
+  "isDeterministic": false,
+  "inputs": [
+    {
+      "name": "ProjectUrl",
+      "category": "parameters",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "TableId",
+      "category": "parameters",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "SensitivityId",
+      "category": "parameters",
+      "type": "string",
+      "required": false
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+.env
+.venv/
+.vscode/
+__pycache__/
+*.py[cod]
+EIOPA_311225_Central_VA/
+tests/
+esg_file_downloader.py

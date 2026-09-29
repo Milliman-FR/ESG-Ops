@@ -9,6 +9,8 @@ import io
 import json
 import re
 
+from esg_api import extract_table_metadata, normalize_universe_for_files_api, parse_project_url
+
 
 KNOWN_SUBFOLDERS = {"Calibration", "Correlation", "Report", "Tables", "Validation"}
 
@@ -109,40 +111,6 @@ def show_curl(parent, curl_cmd):
     copy_btn.pack(pady=(0, 10))
 
 
-def parse_project_url(value: str):
-    """
-    Extrait automatiquement :
-    - base_url : https://esg-xxx.milliman-mind.com
-    - project_id : après /p/<projectId>
-    """
-    value = value.strip()
-    m = re.match(r"^(https?://[^/]+)/p/([^/?#]+)", value)
-    if not m:
-        return None, None
-    return m.group(1), m.group(2)
-
-
-def normalize_universe_for_files_api(raw_universe):
-    """
-    Convertit différentes valeurs possibles de l'API vers le format
-    attendu par l'endpoint /zip/files/{universe}/{versionId}.
-    """
-    if not raw_universe:
-        return "RW"
-
-    value = str(raw_universe).strip()
-
-    mapping = {
-        "RealWorld": "RW",
-        "RiskNeutral": "RN",
-        "RW": "RW",
-        "RN": "RN",
-        "realworld": "RW",
-        "riskneutral": "RN",
-    }
-    return mapping.get(value, value)
-
-
 class APIDownloaderApp:
     def __init__(self, root):
         self.root = root
@@ -214,49 +182,7 @@ class APIDownloaderApp:
         return r.json()
 
     def _extract_table_metadata(self, op_states):
-        by_table = {}
-
-        for st in op_states:
-            table_id = st.get("tableId")
-            table_name = st.get("tableName")
-            version_id = st.get("versionId")
-            last_status = st.get("lastOperationStatus")
-            sensitivity_id = st.get("sensitivityId")
-
-            if not table_id or not table_name or not version_id:
-                continue
-
-            if last_status is not None and last_status != 2:
-                continue
-
-            is_sensitivity = sensitivity_id is not None
-
-            raw_universe = (
-                st.get("universe")
-                or st.get("universeType")
-                or st.get("projectionUniverse")
-                or "RW"
-            )
-            universe = normalize_universe_for_files_api(raw_universe)
-
-            candidate = {
-                "tableId": table_id,
-                "tableName": table_name,
-                "versionId": version_id,
-                "universe": universe,
-                "rawUniverse": raw_universe,
-                "isSensitivityRow": is_sensitivity,
-                "source": st,
-            }
-
-            if table_id not in by_table:
-                by_table[table_id] = candidate
-            else:
-                if by_table[table_id]["isSensitivityRow"] and not is_sensitivity:
-                    by_table[table_id] = candidate
-
-        tables = sorted(by_table.values(), key=lambda x: x["tableName"].lower())
-        return tables
+        return extract_table_metadata(op_states)
 
     def _build_config_window(self):
         self.config_frame = ttk.Frame(self.root, padding=15)

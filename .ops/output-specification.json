@@ -1,0 +1,17 @@
+{
+  "version": "1",
+  "outputs": [
+    {
+      "name": "ESGArchive",
+      "category": "data",
+      "type": "binary",
+      "pattern": "esg_download\\.zip"
+    },
+    {
+      "name": "DownloadSummary",
+      "category": "data",
+      "type": "json",
+      "pattern": "download_summary\\.json"
+    }
+  ]
+}
