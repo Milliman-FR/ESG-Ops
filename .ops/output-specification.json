@@ -14,7 +14,7 @@
       "pattern": "download_summary\\.json"
     },
     {
-      "name": "ESG_Central_VA_sto",
+      "name": "ESG_Central_VA_det",
       "category": "RN Output",
       "type": "csv",
       "pattern": "config\\.csv",
