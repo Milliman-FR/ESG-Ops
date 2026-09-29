@@ -85,7 +85,7 @@ def download(input_directory: Path, output_directory: Path) -> dict:
     with CONFIG.open("rb") as source:
         if source.read(64).startswith(b"version https://git-lfs.github.com/spec/v1"):
             raise ValueError("Fichier Git LFS non matérialisé dans le package Ops.")
-    base_url, project_id = parse_project_url(values["ProjectUrl"])
+    base_url, project_id = parse_project_url("https://esg-caa.milliman-mind.com/p/609add27-24e1-47e6-b4dc-7a5763a45fa1/t")
     parsed = urlsplit(base_url or "")
     if (
         parsed.scheme != "https"
