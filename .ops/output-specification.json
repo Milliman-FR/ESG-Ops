@@ -12,6 +12,13 @@
       "category": "data",
       "type": "json",
       "pattern": "download_summary\\.json"
+    },
+    {
+      "name": "RNOutputTables",
+      "category": "data",
+      "type": "binary",
+      "directory": "tables",
+      "pattern": "[^/]+\\.fac"
     }
   ]
 }

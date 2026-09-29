@@ -2,12 +2,14 @@ import io
 import json
 import tempfile
 import unittest
+import warnings
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from zipfile import BadZipFile, ZipFile
 
 from esg_api import extract_table_metadata, parse_project_url
-from main import download
+from main import download, extract_tables
 
 
 class OpsDownloadTests(unittest.TestCase):
@@ -42,6 +44,9 @@ class OpsDownloadTests(unittest.TestCase):
         archive_bytes = io.BytesIO()
         with ZipFile(archive_bytes, "w") as archive:
             archive.writestr("seed/RN_inputs/data.csv", "a,b\n1,2\n")
+            archive.writestr("MLM_Data_MLM_Param_311225/RN_outputs/Tables/table.fac", b"table data")
+            archive.writestr("MLM_Data_MLM_Param_311225/RN_outputs/Tables/CR_TRANS_MATRIX.fac", b"matrix")
+            archive.writestr("MLM_Data_MLM_Param_311225/RN_outputs/Other/ignored.fac", b"ignored")
 
         post_response = MagicMock()
         post_response.__enter__.return_value = post_response
@@ -51,18 +56,28 @@ class OpsDownloadTests(unittest.TestCase):
             session.get.side_effect = [MagicMock(**{"json.return_value": states}),
                                        MagicMock(**{"json.return_value": ["seed/RN_inputs/data.csv"]})]
             session.post.return_value = post_response
-            summary = download(self.input_directory, self.output_directory)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                summary = download(self.input_directory, self.output_directory)
 
         self.assertEqual(summary["versionId"], "v1")
         self.assertEqual(summary["universe"], "RN")
         self.assertEqual(summary["requestedFileCount"], 1)
+        self.assertEqual(summary["tables"], ["tables/table.fac", "tables/CR_TRANS_MATRIX.fac"])
         self.assertNotIn("fake-test-token", json.dumps(summary))
+        self.assertNotIn("fake-test-token", output.getvalue())
+        for step in ("[1/4] GET", "[2/4] GET", "[3/4] POST", "[4/4] Extraction"):
+            self.assertIn(step, output.getvalue())
+        self.assertIn("sensitivity-1", output.getvalue())
         self.assertEqual(session.get.call_args_list[1].kwargs["params"], {"sensitivityId": "sensitivity-1"})
         self.assertEqual(session.post.call_args.kwargs["headers"]["Authorization"], "Bearer fake-test-token")
         self.assertEqual(session.post.call_args.kwargs["json"], {"filePaths": ["seed/RN_inputs/data.csv"]})
         session_factory.assert_called_once_with()
         with ZipFile(self.output_directory / "esg_download.zip") as result:
-            self.assertEqual(result.namelist(), ["seed/RN_inputs/data.csv"])
+            self.assertIn("seed/RN_inputs/data.csv", result.namelist())
+        self.assertEqual((self.output_directory / "tables/table.fac").read_bytes(), b"table data")
+        self.assertEqual((self.output_directory / "tables/CR_TRANS_MATRIX.fac").read_bytes(), b"matrix")
+        self.assertFalse((self.output_directory / "tables/ignored.fac").exists())
         self.assertEqual(
             json.loads((self.output_directory / "download_summary.json").read_text(encoding="utf-8")),
             summary,
@@ -111,6 +126,43 @@ class OpsDownloadTests(unittest.TestCase):
         self.assertEqual(extract_table_metadata(rows)[0]["versionId"], "v1")
         self.assertEqual(parse_project_url("https://esg-test.milliman-mind.com/p/project-1/t"),
                  ("https://esg-test.milliman-mind.com", "project-1"))
+
+    def test_no_tables_keeps_zip_without_creating_tables_folder(self):
+        archive_bytes = io.BytesIO()
+        with ZipFile(archive_bytes, "w") as archive:
+            archive.writestr("unrelated/data.fac", b"data")
+        with ZipFile(io.BytesIO(archive_bytes.getvalue())) as archive:
+            self.assertEqual(extract_tables(archive, self.output_directory), [])
+        self.assertFalse((self.output_directory / "tables").exists())
+
+    def test_duplicate_table_names_are_rejected_before_writing(self):
+        archive_bytes = io.BytesIO()
+        with ZipFile(archive_bytes, "w") as archive:
+            archive.writestr("MLM_Data_MLM_Param_311225/RN_outputs/Tables/table.fac", b"one")
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                archive.writestr("MLM_Data_MLM_Param_311225/RN_outputs/Tables/table.fac", b"two")
+        with ZipFile(io.BytesIO(archive_bytes.getvalue())) as archive:
+            with self.assertRaisesRegex(ValueError, "double"):
+                extract_tables(archive, self.output_directory)
+        self.assertFalse((self.output_directory / "tables").exists())
+
+    def test_unsafe_table_name_cannot_escape_output_directory(self):
+        archive_bytes = io.BytesIO()
+        with ZipFile(archive_bytes, "w") as archive:
+            archive.writestr("MLM_Data_MLM_Param_311225/RN_outputs/Tables/bad:name.fac", b"data")
+        with ZipFile(io.BytesIO(archive_bytes.getvalue())) as archive:
+            with self.assertRaisesRegex(ValueError, "non sûr"):
+                extract_tables(archive, self.output_directory)
+        self.assertFalse((self.output_directory / "outside.fac").exists())
+
+    def test_nested_table_entry_is_not_extracted(self):
+        archive_bytes = io.BytesIO()
+        with ZipFile(archive_bytes, "w") as archive:
+            archive.writestr("MLM_Data_MLM_Param_311225/RN_outputs/Tables/../outside.fac", b"data")
+        with ZipFile(io.BytesIO(archive_bytes.getvalue())) as archive:
+            self.assertEqual(extract_tables(archive, self.output_directory), [])
+        self.assertFalse((self.output_directory / "outside.fac").exists())
 
 
 if __name__ == "__main__":

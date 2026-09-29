@@ -2,6 +2,8 @@
 
 import argparse
 import json
+import re
+import shutil
 import sys
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -15,6 +17,42 @@ if sys.platform == "win32":
     truststore.inject_into_ssl()
 
 from esg_api import extract_table_metadata, parse_project_url
+
+TABLES_SOURCE = "MLM_Data_MLM_Param_311225/RN_outputs/Tables/"
+
+
+def log_step(number: int, message: str) -> None:
+    """Show API progress in Ops immediately; never include request headers."""
+    print(f"[{number}/4] {message}", flush=True)
+
+
+def extract_tables(archive: ZipFile, output_directory: Path) -> list[str]:
+    """Expose only the direct .fac children of the requested tables folder."""
+    members = [
+        member for member in archive.infolist()
+        if member.filename.startswith(TABLES_SOURCE)
+        and member.filename.endswith(".fac")
+        and "/" not in member.filename[len(TABLES_SOURCE):]
+        and not member.is_dir()
+    ]
+    names = [member.filename[len(TABLES_SOURCE):] for member in members]
+    if any(not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.fac", name) for name in names):
+        raise ValueError("Nom de table non sûr dans l'archive ESG.")
+    if len(names) != len(set(names)):
+        raise ValueError("Noms de tables en double dans l'archive ESG.")
+
+    tables_directory = output_directory / "tables"
+    if members:
+        tables_directory.mkdir(parents=True, exist_ok=True)
+        try:
+            for member, name in zip(members, names, strict=True):
+                with archive.open(member) as source, (tables_directory / name).open("wb") as target:
+                    shutil.copyfileobj(source, target)
+        except (OSError, BadZipFile):
+            for name in names:
+                (tables_directory / name).unlink(missing_ok=True)
+            raise
+    return names
 
 
 def read_inputs(input_directory: Path) -> dict[str, str]:
@@ -61,11 +99,13 @@ def _download_with_session(session, values, base_url, project_id, output_directo
     """Reuse one verified TLS connection for metadata, listing and ZIP requests."""
     headers = {"Authorization": f"Bearer {values['Token']}", "Accept": "application/json"}
     project_path = f"{base_url}/api/projects/{quote(project_id, safe='')}"
+    log_step(1, f"GET {project_path}/operations/tables — récupération des tables du projet")
     states_response = session.get(
         f"{project_path}/operations/tables", headers=headers, timeout=30
     )
     states_response.raise_for_status()
     tables = extract_table_metadata(states_response.json())
+    print(f"Tables exploitables : {len(tables)} ; TableId demandé : {values['TableId']}", flush=True)
     table = next(
         (item for item in tables if str(item["tableId"]) == values["TableId"]), None
     )
@@ -78,6 +118,12 @@ def _download_with_session(session, values, base_url, project_id, output_directo
         f"/{quote(str(table['versionId']), safe='')}"
     )
     params = {"sensitivityId": values["SensitivityId"]} if values.get("SensitivityId") else None
+    print(
+        f"Table sélectionnée : {table['tableName']} ; univers : {table['universe']} ; "
+        f"version : {table['versionId']} ; sensibilité : {values.get('SensitivityId') or 'aucune'}",
+        flush=True,
+    )
+    log_step(2, f"GET {files_url} — liste des fichiers (sensibilité : {values.get('SensitivityId') or 'aucune'})")
     listing = session.get(files_url, headers=headers, params=params, timeout=30)
     listing.raise_for_status()
     file_paths = listing.json()
@@ -85,9 +131,11 @@ def _download_with_session(session, values, base_url, project_id, output_directo
         isinstance(path, str) and path for path in file_paths
     ):
         raise ValueError("Aucun fichier téléchargeable retourné par l'API.")
+    print(f"Fichiers disponibles : {len(file_paths)}", flush=True)
 
     output_directory.mkdir(parents=True, exist_ok=True)
     archive_path = output_directory / "esg_download.zip"
+    log_step(3, f"POST {files_url} — téléchargement du ZIP ({len(file_paths)} fichiers demandés)")
     try:
         with session.post(
             files_url,
@@ -105,9 +153,12 @@ def _download_with_session(session, values, base_url, project_id, output_directo
         with ZipFile(archive_path) as archive:
             if not archive.namelist():
                 raise ValueError("L'archive retournée est vide.")
+            log_step(4, f"Extraction des fichiers .fac de {TABLES_SOURCE} vers les sorties Ops")
+            table_names = extract_tables(archive, output_directory)
     except (OSError, requests.RequestException, BadZipFile, ValueError):
         archive_path.unlink(missing_ok=True)
         raise
+    print(f"Tables .fac exposées : {len(table_names)}", flush=True)
 
     summary = {
         "projectId": project_id,
@@ -118,6 +169,7 @@ def _download_with_session(session, values, base_url, project_id, output_directo
         "sensitivityId": values.get("SensitivityId") or None,
         "requestedFileCount": len(file_paths),
         "archive": archive_path.name,
+        "tables": [f"tables/{name}" for name in table_names],
     }
     with (output_directory / "download_summary.json").open("w", encoding="utf-8") as stream:
         json.dump(summary, stream, ensure_ascii=False, indent=2)
