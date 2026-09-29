@@ -1,15 +1,18 @@
 import io
 import json
+import re
 import tempfile
 import unittest
 import warnings
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from zipfile import BadZipFile, ZipFile
 
+import requests
+
 from esg_api import extract_table_metadata, parse_project_url
-from main import download, extract_tables
+from main import download, extract_tables, main
 
 
 class OpsDownloadTests(unittest.TestCase):
@@ -127,6 +130,70 @@ class OpsDownloadTests(unittest.TestCase):
         self.assertEqual(parse_project_url("https://esg-test.milliman-mind.com/p/project-1/t"),
                  ("https://esg-test.milliman-mind.com", "project-1"))
 
+    def test_ops_spec_declares_each_table_separately_under_rn_output(self):
+        spec_path = Path(__file__).resolve().parents[1] / ".ops/output-specification.json"
+        outputs = json.loads(spec_path.read_text(encoding="utf-8"))["outputs"]
+        rn_outputs = [item for item in outputs if item["category"] == "RN Output"]
+        names = {
+            "CR_CURVE_SPREAD_PC", "CR_CURVE_SPREAD_PC_CEV", "CR_TRANS_MATRIX",
+            "CR_TRANS_MATRIX_CEV", "table", "table_CEV",
+            "ZCB", "ZCB_CEV",
+        }
+        self.assertEqual({item["name"] for item in rn_outputs}, names)
+        self.assertEqual(len(rn_outputs), len(names))
+        for item in rn_outputs:
+            self.assertEqual(item["directory"], "tables")
+            self.assertEqual(item["type"], "binary")
+            if not item["name"].startswith("ZCB"):
+                self.assertEqual(item["pattern"], rf"{item['name']}\.fac")
+        for basename, expected_output in (
+            ("ZCB_MLM_Data_MLM_Param_311225.fac", "ZCB"),
+            ("ZCB_MLM_Data_MLM_Param_311225_CEV.fac", "ZCB_CEV"),
+            ("ZCB_CAA_Data_CAA_Param_300626.fac", "ZCB"),
+            ("ZCB_CAA_Data_CAA_Param_300626_CEV.fac", "ZCB_CEV"),
+        ):
+            matched = [item["name"] for item in rn_outputs
+                       if re.fullmatch(item["pattern"], basename, re.IGNORECASE)]
+            self.assertEqual(matched, [expected_output])
+        self.assertEqual({item["name"] for item in outputs if item["category"] == "data"},
+                         {"ESGArchive", "DownloadSummary"})
+
+    def test_api_logs_mask_caa_but_request_uses_actual_host(self):
+        self.write_inputs(ProjectUrl="https://esg-caa.milliman-mind.com/p/project-1/t",
+                          Token="fake-test-token", TableId="table-1")
+        states = [{"tableId": "table-1", "tableName": "Test", "versionId": "v1"}]
+        archive_bytes = io.BytesIO()
+        with ZipFile(archive_bytes, "w") as archive:
+            archive.writestr("data.csv", b"data")
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.iter_content.return_value = iter([archive_bytes.getvalue()])
+        with patch("main.requests.Session") as session_factory:
+            session = session_factory.return_value.__enter__.return_value
+            session.get.side_effect = [MagicMock(**{"json.return_value": states}),
+                                       MagicMock(**{"json.return_value": ["data.csv"]})]
+            session.post.return_value = response
+            output = io.StringIO()
+            with redirect_stdout(output):
+                download(self.input_directory, self.output_directory)
+        self.assertIn("GET https://esg.milliman-mind.com/", output.getvalue())
+        self.assertIn("POST https://esg.milliman-mind.com/", output.getvalue())
+        self.assertNotIn("esg-caa", output.getvalue())
+        self.assertNotIn("fake-test-token", output.getvalue())
+        self.assertIn("esg-caa.milliman-mind.com", session.get.call_args_list[0].args[0])
+        self.assertIn("esg-caa.milliman-mind.com", session.post.call_args.args[0])
+
+    def test_api_failure_log_masks_caa_hostname(self):
+        error = requests.ConnectTimeout("Connection to esg-caa.milliman-mind.com timed out")
+        stderr = io.StringIO()
+        with patch("sys.argv", ["main.py", "run", str(self.input_directory), str(self.output_directory)]), \
+             patch("main.download", side_effect=error), redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as exit_status:
+                main()
+        self.assertEqual(exit_status.exception.code, 1)
+        self.assertIn("esg.milliman-mind.com", stderr.getvalue())
+        self.assertNotIn("esg-caa", stderr.getvalue())
+
     def test_no_tables_keeps_zip_without_creating_tables_folder(self):
         archive_bytes = io.BytesIO()
         with ZipFile(archive_bytes, "w") as archive:
@@ -134,6 +201,19 @@ class OpsDownloadTests(unittest.TestCase):
         with ZipFile(io.BytesIO(archive_bytes.getvalue())) as archive:
             self.assertEqual(extract_tables(archive, self.output_directory), [])
         self.assertFalse((self.output_directory / "tables").exists())
+
+    def test_other_table_name_and_date_are_extracted_with_original_filenames(self):
+        archive_bytes = io.BytesIO()
+        with ZipFile(archive_bytes, "w") as archive:
+            archive.writestr("CAA_Data_CAA_Param_300626/RN_outputs/Tables/ZCB_CAA_Data_CAA_Param_300626.fac", b"zcb")
+            archive.writestr("CAA_Data_CAA_Param_300626/RN_outputs/Tables/ZCB_CAA_Data_CAA_Param_300626_CEV.fac", b"cev")
+            archive.writestr("CAA_Data_CAA_Param_300626/RW_outputs/Tables/other.fac", b"excluded")
+        with ZipFile(io.BytesIO(archive_bytes.getvalue())) as archive:
+            names = extract_tables(archive, self.output_directory)
+        self.assertEqual(names, ["ZCB_CAA_Data_CAA_Param_300626.fac", "ZCB_CAA_Data_CAA_Param_300626_CEV.fac"])
+        self.assertEqual((self.output_directory / "tables" / names[0]).read_bytes(), b"zcb")
+        self.assertEqual((self.output_directory / "tables" / names[1]).read_bytes(), b"cev")
+        self.assertFalse((self.output_directory / "tables/other.fac").exists())
 
     def test_duplicate_table_names_are_rejected_before_writing(self):
         archive_bytes = io.BytesIO()

@@ -18,34 +18,37 @@ if sys.platform == "win32":
 
 from esg_api import extract_table_metadata, parse_project_url
 
-TABLES_SOURCE = "MLM_Data_MLM_Param_311225/RN_outputs/Tables/"
+TABLES_SOURCE = re.compile(r"^[A-Za-z0-9_.-]+/RN_outputs/Tables/([^/]+\.fac)$")
+
+
+def log(message: str, *, file=None) -> None:
+    """Mask the CAA hostname in displayed logs, not in real API requests."""
+    print(message.replace("esg-caa", "esg"), file=file, flush=True)
 
 
 def log_step(number: int, message: str) -> None:
     """Show API progress in Ops immediately; never include request headers."""
-    print(f"[{number}/4] {message}", flush=True)
+    log(f"[{number}/4] {message}")
 
 
 def extract_tables(archive: ZipFile, output_directory: Path) -> list[str]:
-    """Expose only the direct .fac children of the requested tables folder."""
-    members = [
-        member for member in archive.infolist()
-        if member.filename.startswith(TABLES_SOURCE)
-        and member.filename.endswith(".fac")
-        and "/" not in member.filename[len(TABLES_SOURCE):]
-        and not member.is_dir()
+    """Expose direct .fac files in a table's RN_outputs/Tables folder."""
+    matches = [
+        (member, match.group(1))
+        for member in archive.infolist()
+        if not member.is_dir() and (match := TABLES_SOURCE.fullmatch(member.filename))
     ]
-    names = [member.filename[len(TABLES_SOURCE):] for member in members]
+    names = [name for _, name in matches]
     if any(not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.fac", name) for name in names):
         raise ValueError("Nom de table non sûr dans l'archive ESG.")
     if len(names) != len(set(names)):
         raise ValueError("Noms de tables en double dans l'archive ESG.")
 
     tables_directory = output_directory / "tables"
-    if members:
+    if matches:
         tables_directory.mkdir(parents=True, exist_ok=True)
         try:
-            for member, name in zip(members, names, strict=True):
+            for member, name in matches:
                 with archive.open(member) as source, (tables_directory / name).open("wb") as target:
                     shutil.copyfileobj(source, target)
         except (OSError, BadZipFile):
@@ -105,7 +108,7 @@ def _download_with_session(session, values, base_url, project_id, output_directo
     )
     states_response.raise_for_status()
     tables = extract_table_metadata(states_response.json())
-    print(f"Tables exploitables : {len(tables)} ; TableId demandé : {values['TableId']}", flush=True)
+    log(f"Tables exploitables : {len(tables)} ; TableId demandé : {values['TableId']}")
     table = next(
         (item for item in tables if str(item["tableId"]) == values["TableId"]), None
     )
@@ -118,10 +121,9 @@ def _download_with_session(session, values, base_url, project_id, output_directo
         f"/{quote(str(table['versionId']), safe='')}"
     )
     params = {"sensitivityId": values["SensitivityId"]} if values.get("SensitivityId") else None
-    print(
+    log(
         f"Table sélectionnée : {table['tableName']} ; univers : {table['universe']} ; "
-        f"version : {table['versionId']} ; sensibilité : {values.get('SensitivityId') or 'aucune'}",
-        flush=True,
+        f"version : {table['versionId']} ; sensibilité : {values.get('SensitivityId') or 'aucune'}"
     )
     log_step(2, f"GET {files_url} — liste des fichiers (sensibilité : {values.get('SensitivityId') or 'aucune'})")
     listing = session.get(files_url, headers=headers, params=params, timeout=30)
@@ -131,7 +133,7 @@ def _download_with_session(session, values, base_url, project_id, output_directo
         isinstance(path, str) and path for path in file_paths
     ):
         raise ValueError("Aucun fichier téléchargeable retourné par l'API.")
-    print(f"Fichiers disponibles : {len(file_paths)}", flush=True)
+    log(f"Fichiers disponibles : {len(file_paths)}")
 
     output_directory.mkdir(parents=True, exist_ok=True)
     archive_path = output_directory / "esg_download.zip"
@@ -153,12 +155,12 @@ def _download_with_session(session, values, base_url, project_id, output_directo
         with ZipFile(archive_path) as archive:
             if not archive.namelist():
                 raise ValueError("L'archive retournée est vide.")
-            log_step(4, f"Extraction des fichiers .fac de {TABLES_SOURCE} vers les sorties Ops")
+            log_step(4, "Extraction des fichiers .fac des dossiers RN_outputs/Tables vers les sorties Ops")
             table_names = extract_tables(archive, output_directory)
     except (OSError, requests.RequestException, BadZipFile, ValueError):
         archive_path.unlink(missing_ok=True)
         raise
-    print(f"Tables .fac exposées : {len(table_names)}", flush=True)
+    log(f"Tables .fac exposées : {len(table_names)}")
 
     summary = {
         "projectId": project_id,
@@ -182,8 +184,12 @@ def main() -> None:
     parser.add_argument("input_directory", type=Path)
     parser.add_argument("output_directory", type=Path)
     args = parser.parse_args()
-    summary = download(args.input_directory.resolve(), args.output_directory.resolve())
-    print(f"Archive créée : {summary['archive']} ({summary['requestedFileCount']} fichiers demandés)")
+    try:
+        summary = download(args.input_directory.resolve(), args.output_directory.resolve())
+    except requests.RequestException as exc:
+        log(f"Erreur API : {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+    log(f"Archive créée : {summary['archive']} ({summary['requestedFileCount']} fichiers demandés)")
 
 
 if __name__ == "__main__":

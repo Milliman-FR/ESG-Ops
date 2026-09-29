@@ -14,11 +14,60 @@
       "pattern": "download_summary\\.json"
     },
     {
-      "name": "RNOutputTables",
-      "category": "data",
+      "name": "CR_CURVE_SPREAD_PC",
+      "category": "RN Output",
       "type": "binary",
       "directory": "tables",
-      "pattern": "[^/]+\\.fac"
+      "pattern": "CR_CURVE_SPREAD_PC\\.fac"
+    },
+    {
+      "name": "CR_CURVE_SPREAD_PC_CEV",
+      "category": "RN Output",
+      "type": "binary",
+      "directory": "tables",
+      "pattern": "CR_CURVE_SPREAD_PC_CEV\\.fac"
+    },
+    {
+      "name": "CR_TRANS_MATRIX",
+      "category": "RN Output",
+      "type": "binary",
+      "directory": "tables",
+      "pattern": "CR_TRANS_MATRIX\\.fac"
+    },
+    {
+      "name": "CR_TRANS_MATRIX_CEV",
+      "category": "RN Output",
+      "type": "binary",
+      "directory": "tables",
+      "pattern": "CR_TRANS_MATRIX_CEV\\.fac"
+    },
+    {
+      "name": "table",
+      "category": "RN Output",
+      "type": "binary",
+      "directory": "tables",
+      "pattern": "table\\.fac"
+    },
+    {
+      "name": "table_CEV",
+      "category": "RN Output",
+      "type": "binary",
+      "directory": "tables",
+      "pattern": "table_CEV\\.fac"
+    },
+    {
+      "name": "ZCB",
+      "category": "RN Output",
+      "type": "binary",
+      "directory": "tables",
+      "pattern": "ZCB_(?![A-Za-z0-9_]+_CEV\\.fac$)[A-Za-z0-9_]+\\.fac"
+    },
+    {
+      "name": "ZCB_CEV",
+      "category": "RN Output",
+      "type": "binary",
+      "directory": "tables",
+      "pattern": "ZCB_[A-Za-z0-9_]+_CEV\\.fac"
     }
   ]
 }
