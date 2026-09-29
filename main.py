@@ -2,13 +2,11 @@
 
 import argparse
 import json
-import os
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 from zipfile import BadZipFile, ZipFile
 
 import requests
-from dotenv import load_dotenv
 
 from esg_api import extract_table_metadata, parse_project_url
 
@@ -24,10 +22,10 @@ def read_inputs(input_directory: Path) -> dict[str, str]:
     values = {}
     for entry in entries:
         if entry.get("category") == "parameters" and entry.get("name") in {
-            "ProjectUrl", "TableId", "SensitivityId"
+            "ProjectUrl", "Token", "TableId", "SensitivityId"
         }:
             values[entry["name"]] = str(entry.get("value") or "").strip()
-    for required in ("ProjectUrl", "TableId"):
+    for required in ("ProjectUrl", "Token", "TableId"):
         if not values.get(required):
             raise ValueError(f"Entrée obligatoire absente : {required}")
     return values
@@ -49,13 +47,7 @@ def download(input_directory: Path, output_directory: Path) -> dict:
     ):
         raise ValueError("ProjectUrl doit être une URL HTTPS ESG sur milliman-mind.com.")
 
-    # A runtime-provided variable wins over a local .env file. Never publish .env.
-    load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
-    token = os.environ.get("TOKEN", "").strip()
-    if not token:
-        raise ValueError("TOKEN absent : fournir la variable d'environnement ou un .env local avec TOKEN=...")
-
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    headers = {"Authorization": f"Bearer {values['Token']}", "Accept": "application/json"}
     project_path = f"{base_url}/api/projects/{quote(project_id, safe='')}"
     states_response = requests.get(
         f"{project_path}/operations/tables", headers=headers, timeout=30

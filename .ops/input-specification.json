@@ -10,6 +10,12 @@
       "required": true
     },
     {
+      "name": "Token",
+      "category": "parameters",
+      "type": "string",
+      "required": true
+    },
+    {
       "name": "TableId",
       "category": "parameters",
       "type": "string",
