@@ -14,6 +14,16 @@
       "pattern": "download_summary\\.json"
     },
     {
+      "name": "ESG_Central_VA_sto",
+      "category": "RN Output",
+      "type": "csv",
+      "pattern": "config\\.csv",
+      "options": {
+        "delimiter": ";",
+        "culture": "en-US"
+      }
+    },
+    {
       "name": "CR_CURVE_SPREAD_PC",
       "category": "RN Output",
       "type": "binary",

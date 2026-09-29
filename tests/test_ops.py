@@ -23,6 +23,11 @@ class OpsDownloadTests(unittest.TestCase):
         self.input_directory = root / "input"
         self.input_directory.mkdir()
         self.output_directory = root / "output"
+        self.sto_csv = root / "ESG_311225_Central_VA_sto.csv"
+        self.sto_csv.write_bytes(b"SIMULATION;ECONOMY;2025\n1;EUR;0.02\n")
+        sto_patch = patch("main.STO_CSV", self.sto_csv)
+        sto_patch.start()
+        self.addCleanup(sto_patch.stop)
 
     def write_inputs(self, **values):
         (self.input_directory / "inputs.json").write_text(
@@ -69,6 +74,7 @@ class OpsDownloadTests(unittest.TestCase):
         self.assertEqual(summary["tables"], ["tables/table.fac", "tables/CR_TRANS_MATRIX.fac"])
         self.assertNotIn("fake-test-token", json.dumps(summary))
         self.assertNotIn("fake-test-token", output.getvalue())
+        self.assertNotIn(self.sto_csv.name, output.getvalue())
         for step in ("[1/4] GET", "[2/4] GET", "[3/4] POST", "[4/4] Extraction"):
             self.assertIn(step, output.getvalue())
         self.assertIn("sensitivity-1", output.getvalue())
@@ -81,6 +87,7 @@ class OpsDownloadTests(unittest.TestCase):
         self.assertEqual((self.output_directory / "tables/table.fac").read_bytes(), b"table data")
         self.assertEqual((self.output_directory / "tables/CR_TRANS_MATRIX.fac").read_bytes(), b"matrix")
         self.assertFalse((self.output_directory / "tables/ignored.fac").exists())
+        self.assertEqual((self.output_directory / self.sto_csv.name).read_bytes(), self.sto_csv.read_bytes())
         self.assertEqual(
             json.loads((self.output_directory / "download_summary.json").read_text(encoding="utf-8")),
             summary,
@@ -90,6 +97,15 @@ class OpsDownloadTests(unittest.TestCase):
         self.write_inputs(ProjectUrl="https://esg-test.milliman-mind.com/p/p", TableId="t")
         with patch("main.requests.Session") as session_factory:
             with self.assertRaisesRegex(ValueError, "Token"):
+                download(self.input_directory, self.output_directory)
+            session_factory.assert_not_called()
+
+    def test_lfs_pointer_is_rejected_before_network(self):
+        self.write_inputs(ProjectUrl="https://esg-test.milliman-mind.com/p/p",
+                          Token="fake-test-token", TableId="t")
+        self.sto_csv.write_bytes(b"version https://git-lfs.github.com/spec/v1\n" + b"oid sha256:" + b"0" * 64)
+        with patch("main.requests.Session") as session_factory:
+            with self.assertRaisesRegex(ValueError, "Git LFS non matérialisé"):
                 download(self.input_directory, self.output_directory)
             session_factory.assert_not_called()
 
@@ -134,14 +150,20 @@ class OpsDownloadTests(unittest.TestCase):
         spec_path = Path(__file__).resolve().parents[1] / ".ops/output-specification.json"
         outputs = json.loads(spec_path.read_text(encoding="utf-8"))["outputs"]
         rn_outputs = [item for item in outputs if item["category"] == "RN Output"]
+        sto_output = next(item for item in rn_outputs if item["name"] == "ESG_Central_VA_sto")
+        self.assertEqual(sto_output["type"], "csv")
+        self.assertEqual(sto_output["pattern"], r"ESG_311225_Central_VA_sto\.csv")
+        self.assertEqual(sto_output["options"]["delimiter"], ";")
         names = {
             "CR_CURVE_SPREAD_PC", "CR_CURVE_SPREAD_PC_CEV", "CR_TRANS_MATRIX",
             "CR_TRANS_MATRIX_CEV", "table", "table_CEV",
             "ZCB", "ZCB_CEV",
         }
-        self.assertEqual({item["name"] for item in rn_outputs}, names)
-        self.assertEqual(len(rn_outputs), len(names))
+        self.assertEqual({item["name"] for item in rn_outputs}, names | {sto_output["name"]})
+        self.assertEqual(len(rn_outputs), len(names) + 1)
         for item in rn_outputs:
+            if item is sto_output:
+                continue
             self.assertEqual(item["directory"], "tables")
             self.assertEqual(item["type"], "binary")
             if not item["name"].startswith("ZCB"):

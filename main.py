@@ -19,6 +19,7 @@ if sys.platform == "win32":
 from esg_api import extract_table_metadata, parse_project_url
 
 TABLES_SOURCE = re.compile(r"^[A-Za-z0-9_.-]+/RN_outputs/Tables/([^/]+\.fac)$")
+CONFIG = Path(__file__).resolve().parent / "tests" / "config.csv"
 
 
 def log(message: str, *, file=None) -> None:
@@ -81,6 +82,9 @@ def read_inputs(input_directory: Path) -> dict[str, str]:
 def download(input_directory: Path, output_directory: Path) -> dict:
     """Download the selected table as a single ZIP into the Ops output volume."""
     values = read_inputs(input_directory)
+    with CONFIG.open("rb") as source:
+        if source.read(64).startswith(b"version https://git-lfs.github.com/spec/v1"):
+            raise ValueError("Fichier Git LFS non matérialisé dans le package Ops.")
     base_url, project_id = parse_project_url(values["ProjectUrl"])
     parsed = urlsplit(base_url or "")
     if (
@@ -175,6 +179,7 @@ def _download_with_session(session, values, base_url, project_id, output_directo
     }
     with (output_directory / "download_summary.json").open("w", encoding="utf-8") as stream:
         json.dump(summary, stream, ensure_ascii=False, indent=2)
+    shutil.copyfile(CONFIG, output_directory / CONFIG.name)
     return summary
 
 

@@ -4,6 +4,7 @@
 __pycache__/
 *.py[cod]
 EIOPA_311225_Central_VA/
-tests/
+tests/*.py
+tests/__pycache__/
 esg_file_downloader.py
 inputs/
