@@ -17,7 +17,7 @@
       "name": "ESG_Central_VA_det",
       "category": "RN Output",
       "type": "csv",
-      "pattern": "config\\.csv",
+      "pattern": "ESG_Central_VA_det\\.csv",
       "options": {
         "delimiter": ";",
         "culture": "en-US"

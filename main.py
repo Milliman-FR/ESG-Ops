@@ -90,13 +90,21 @@ def download(input_directory: Path, output_directory: Path) -> dict:
     if (
         parsed.scheme != "https"
         or not parsed.hostname
-        or not parsed.hostname.startswith("esg-")
-        or not parsed.hostname.endswith(".milliman-mind.com")
+        or (
+            parsed.netloc.lower() != "esg.milliman-mind.com"
+            and not (
+                parsed.hostname.startswith("esg-")
+                and parsed.hostname.endswith(".milliman-mind.com")
+            )
+        )
         or parsed.username
         or parsed.password
         or not project_id
     ):
         raise ValueError("ProjectUrl doit être une URL HTTPS ESG sur milliman-mind.com.")
+
+    if parsed.netloc.lower() == "esg.milliman-mind.com":
+        base_url = "https://esg-caa.milliman-mind.com"
 
     with requests.Session() as session:
         return _download_with_session(session, values, base_url, project_id, output_directory)
@@ -179,7 +187,7 @@ def _download_with_session(session, values, base_url, project_id, output_directo
     }
     with (output_directory / "download_summary.json").open("w", encoding="utf-8") as stream:
         json.dump(summary, stream, ensure_ascii=False, indent=2)
-    shutil.copyfile(CONFIG, output_directory / CONFIG.name)
+    shutil.copyfile(CONFIG, output_directory / "ESG_Central_VA_det.csv")
     return summary
 
 
